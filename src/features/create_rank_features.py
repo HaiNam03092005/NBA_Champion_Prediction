@@ -1,17 +1,35 @@
 import pandas as pd
+import numpy as np
 import os
 
+# ==========================================
 # 1. ĐỊNH NGHĨA ĐƯỜNG DẪN FILE
+# ==========================================
 INPUT_FILE = 'data/processed/final_complete_dataset.csv'
 OUTPUT_FILE = 'data/processed/model_ready_dataset.csv'
 
+print("============ TIẾN TRÌNH TẠO ĐẶC TRƯNG BẬC CAO (ADVANCED FEATURES) ============")
+
+# ==========================================
 # 2. ĐỌC DỮ LIỆU
+# ==========================================
 print(f"🔄 Bước 1: Đang đọc dữ liệu từ '{INPUT_FILE}'...")
 if not os.path.exists(INPUT_FILE):
     print(f"❌ LỖI: Không tìm thấy file '{INPUT_FILE}'.")
     exit()
 
 df = pd.read_csv(INPUT_FILE)
+
+# ==========================================
+# [BỔ SUNG TỪ LUKE-LITE] XỬ LÝ CHỈ SỐ ELO RATING
+# ==========================================
+if 'Elo_Score' not in df.columns and all(c in df.columns for c in ['W', 'L', 'SRS']):
+    print("💡 Gợi ý từ luke-lite: Không tìm thấy 'Elo_Score' gốc, tự động tối ưu hóa Proxy Elo dựa trên Win% và SRS...")
+    # Thuật toán xây dựng điểm Elo cơ sở (Điểm sàn 1500 + Biến động phong độ Regular Season)
+    win_pct = df['W'] / (df['W'] + df['L']).replace(0, 0.5)
+    df['Elo_Score'] = 1500 + (win_pct - 0.5) * 300 + df['SRS'] * 15
+elif 'Elo_Score' in df.columns:
+    print("📈 Tìm thấy chỉ số 'Elo_Score' từ hệ thống Scraper của luke-lite.")
 
 # ==========================================
 # 3. TÍNH TOÁN ĐỘ TUỔI HOÀNG KIM (AGE DIFF)
@@ -35,10 +53,13 @@ rank_metrics = {
     'DRtg': True, 'MOV': False, 'TS%': False,
     'Team_Total_VORP': False, 'Team_Avg_OBPM': False, 'Team_Avg_DBPM': False,
     
-    # --- CHỈ SỐ THỂ LỰC & ĐỘI HÌNH (MỚI THÊM) ---
+    # --- CHỈ SỐ THỂ LỰC & ĐỘI HÌNH ---
     'Playoff_Core_VORP_Share': False,  # Bộ khung 7 người càng gánh team -> Hạng càng cao
     'Bench_Tactical_BPM': False,       # Ghế dự bị càng xịn -> Hạng càng cao
-    'Core_Fatigue_MP': True            # Số phút cày ải THẤP (Ít mệt mỏi nhất) -> Hạng càng cao
+    'Core_Fatigue_MP': True,           # Số phút cày ải THẤP (Ít mệt mỏi nhất) -> Hạng càng cao
+    
+    # --- ĐẶC TRƯNG PHONG ĐỘ NÂNG CAO (MỚI THÊM TỪ LUKE-LITE) ---
+    'Elo_Score': False                 # Điểm số Elo càng cao -> Thứ hạng Elo_Rank càng lớn (hạng 1)
 }
 
 for col, is_ascending in rank_metrics.items():
@@ -71,6 +92,32 @@ if 'W' in df.columns and 'Conference' in df.columns:
     df['Conf_Seed'] = df.groupby(['Season_Year', 'Conference'])['W'].rank(ascending=False, method='min')
 
 # ==========================================
+# [BỔ SUNG HƯỚNG 4] DBSCAN PHÂN CỤM VƯƠNG TRIỀU (DYNASTY CLUSTERS)
+# ==========================================
+print("🔮 Bước 4.5: Áp dụng DBSCAN phân cụm mật độ để tìm profile các đội thống trị...")
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
+
+# Đảm bảo các đặc trưng chiến lược đầu vào cho DBSCAN đều đã được tính toán xong
+features_for_clustering = ['SRS', 'NRtg', 'TS%', 'Superstar_Impact_Score']
+existing_clust_features = [c for c in features_for_clustering if c in df.columns]
+
+if len(existing_clust_features) == len(features_for_clustering):
+    # Trích xuất dữ liệu và chuẩn hóa cục bộ trước khi truyền vào thuật toán mật độ
+    X_cluster = df[existing_clust_features].fillna(0)
+    X_scaled = StandardScaler().fit_transform(X_cluster)
+
+    # Cấu hình eps tối ưu giúp thuật toán bóc tách chính xác các nhóm cực kỳ xuất sắc (Championship Contenders)
+    dbscan = DBSCAN(eps=0.6, min_samples=3)
+    df['Dynasty_Cluster'] = dbscan.fit_predict(X_scaled)
+
+    # Chuyển đổi thành nhãn nhị phân: 1 nếu lọt vào cụm tinh hoa, 0 nếu bị coi là nhiễu (-1)
+    df['Is_Dynasty_Profile'] = (df['Dynasty_Cluster'] != -1).astype(int)
+    print(f"   📊 Số lượng đội bóng lọt vào profile Vương Triều: {df['Is_Dynasty_Profile'].sum()} đội.")
+else:
+    print("⚠️ CẢNH BÁO: Không thể chạy DBSCAN do thiếu một trong các trường đặc trưng cốt lõi.")
+
+# ==========================================
 # 6. LƯU DỮ LIỆU SẴN SÀNG CHO MODEL
 # ==========================================
 print(f"\n💾 Bước 5: Đang xuất tập dữ liệu siêu việt ra file '{OUTPUT_FILE}'...")
@@ -79,5 +126,6 @@ if 'Conf_Seed' in df.columns:
 
 df.to_csv(OUTPUT_FILE, index=False)
 
-print(f"✅ Đã thêm Xếp hạng (Rank) cho các chỉ số Thể lực & Chiều sâu đội hình.")
+print(f"✅ Đã thêm Xếp hạng (Rank) cho chỉ số Elo Rating, Thể lực & Chiều sâu đội hình.")
+print(f"✅ Đã tích hợp thành công bộ lọc phân cụm DBSCAN Dynasty Classifier.")
 print(f"✅ Kích thước Dataset cuối cùng: {df.shape[0]} dòng, {df.shape[1]} cột.")
