@@ -1,38 +1,40 @@
 import pandas as pd
 import numpy as np
 import os
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
 
 # ==========================================
 # 1. ĐỊNH NGHĨA ĐƯỜNG DẪN FILE
 # ==========================================
+# File này đọc trực tiếp kết quả đã được gộp hoàn hảo từ merge_all.py
 INPUT_FILE = 'data/processed/final_complete_dataset.csv'
 OUTPUT_FILE = 'data/processed/model_ready_dataset.csv'
 
 print("============ TIẾN TRÌNH TẠO ĐẶC TRƯNG BẬC CAO (ADVANCED FEATURES) ============")
 
 # ==========================================
-# 2. ĐỌC DỮ LIỆU
+# 2. ĐỌC DỮ LIỆU GỐC
 # ==========================================
 print(f"🔄 Bước 1: Đang đọc dữ liệu từ '{INPUT_FILE}'...")
 if not os.path.exists(INPUT_FILE):
-    print(f"❌ LỖI: Không tìm thấy file '{INPUT_FILE}'.")
+    print(f"❌ LỖI: Không tìm thấy file '{INPUT_FILE}'. Vui lòng chạy merge_all.py trước!")
     exit()
 
 df = pd.read_csv(INPUT_FILE)
 
 # ==========================================
-# [BỔ SUNG TỪ LUKE-LITE] XỬ LÝ CHỈ SỐ ELO RATING
+# 3. [BỔ SUNG TỪ LUKE-LITE] XỬ LÝ CHỈ SỐ ELO RATING
 # ==========================================
+print("💡 Bước 1.5: Kiểm tra và tối ưu Proxy Elo Rating...")
 if 'Elo_Score' not in df.columns and all(c in df.columns for c in ['W', 'L', 'SRS']):
-    print("💡 Gợi ý từ luke-lite: Không tìm thấy 'Elo_Score' gốc, tự động tối ưu hóa Proxy Elo dựa trên Win% và SRS...")
-    # Thuật toán xây dựng điểm Elo cơ sở (Điểm sàn 1500 + Biến động phong độ Regular Season)
     win_pct = df['W'] / (df['W'] + df['L']).replace(0, 0.5)
     df['Elo_Score'] = 1500 + (win_pct - 0.5) * 300 + df['SRS'] * 15
 elif 'Elo_Score' in df.columns:
-    print("📈 Tìm thấy chỉ số 'Elo_Score' từ hệ thống Scraper của luke-lite.")
+    print("   📈 Đã có sẵn chỉ số 'Elo_Score' trong dữ liệu.")
 
 # ==========================================
-# 3. TÍNH TOÁN ĐỘ TUỔI HOÀNG KIM (AGE DIFF)
+# 4. TÍNH TOÁN ĐỘ TUỔI HOÀNG KIM (AGE DIFF)
 # ==========================================
 print("🧬 Bước 2: Bổ sung chỉ số chênh lệch Tuổi hoàng kim (Age_Diff)...")
 if 'Age' in df.columns and 'Target_Champ' in df.columns:
@@ -44,22 +46,28 @@ if 'Age' in df.columns and 'Target_Champ' in df.columns:
     df['Age_Diff_Rank'] = df.groupby('Season_Year')['Age_Diff'].rank(ascending=True, method='min')
 
 # ==========================================
-# 4. TÍNH TOÁN CÁC CỘT XẾP HẠNG CƠ BẢN (RANKING)
+# 5. TÍNH TOÁN CÁC CỘT XẾP HẠNG CƠ BẢN & ĐỐI KHÁNG
 # ==========================================
-print("📊 Bước 3: Đang tính toán thứ hạng (Rank) cốt lõi và Thể lực...")
+print("📊 Bước 3: Đang tính toán thứ hạng (Rank) cốt lõi, Thể lực & Đặc trưng Đối kháng...")
 rank_metrics = {
-    # --- Các chỉ số Đội bóng cơ bản (Team Stats) ---
+    # --- Các chỉ số Đội bóng cơ bản ---
     'W': False, 'SRS': False, 'NRtg': False, 'ORtg': False, 
     'DRtg': True, 'MOV': False, 'TS%': False,
     'Team_Total_VORP': False, 'Team_Avg_OBPM': False, 'Team_Avg_DBPM': False,
     
-    # --- CHỈ SỐ THỂ LỰC & ĐỘI HÌNH ---
-    'Playoff_Core_VORP_Share': False,  # Bộ khung 7 người càng gánh team -> Hạng càng cao
-    'Bench_Tactical_BPM': False,       # Ghế dự bị càng xịn -> Hạng càng cao
-    'Core_Fatigue_MP': True,           # Số phút cày ải THẤP (Ít mệt mỏi nhất) -> Hạng càng cao
+    # --- Chỉ số thể lực & Đội hình ---
+    'Playoff_Core_VORP_Share': False,  
+    'Bench_Tactical_BPM': False,       
+    'Core_Fatigue_MP': True,           
     
-    # --- ĐẶC TRƯNG PHONG ĐỘ NÂNG CAO (MỚI THÊM TỪ LUKE-LITE) ---
-    'Elo_Score': False                 # Điểm số Elo càng cao -> Thứ hạng Elo_Rank càng lớn (hạng 1)
+    # --- Đặc trưng phong độ nâng cao ---
+    'Elo_Score': False,
+    
+    # --- THỨ HẠNG CỦA CÁC ĐẶC TRƯNG ĐỐI KHÁNG (Đã được merge_all gộp vào) ---
+    'Diff_PTS': False,   # Hiệu số điểm càng cao -> Hạng càng tốt (Hạng 1)
+    'Diff_eFG': False,   # Hiệu số hiệu suất rổ càng cao -> Hạng càng tốt
+    'Diff_REB': False,   # Thắng kiểm soát bóng càng nhiều -> Hạng càng tốt
+    'Diff_TOV': True     # Lỗi mất bóng ít hơn đối thủ (Chênh lệch Âm) -> Hạng càng tốt (True)
 }
 
 for col, is_ascending in rank_metrics.items():
@@ -67,9 +75,9 @@ for col, is_ascending in rank_metrics.items():
         df[f"{col}_Rank"] = df.groupby('Season_Year')[col].rank(ascending=is_ascending, method='min')
 
 # ==========================================
-# 5. CÁC LUẬT BÓNG RỔ THỰC TẾ (DOMAIN KNOWLEDGE)
+# 6. CÁC LUẬT BÓNG RỔ THỰC TẾ (DOMAIN KNOWLEDGE)
 # ==========================================
-print("🧠 Bước 4: Khởi tạo các biến Domain Knowledge (Thủ Top 11, Two-Way, eFG%, Superstar)...")
+print("🧠 Bước 4: Khởi tạo biến Domain Knowledge (Elite Defense, Two-Way, eFG_Diff, Superstar)...")
 
 if 'DRtg_Rank' in df.columns:
     df['Elite_Defense_Flag'] = (df['DRtg_Rank'] <= 11).astype(int)
@@ -92,35 +100,29 @@ if 'W' in df.columns and 'Conference' in df.columns:
     df['Conf_Seed'] = df.groupby(['Season_Year', 'Conference'])['W'].rank(ascending=False, method='min')
 
 # ==========================================
-# [BỔ SUNG HƯỚNG 4] DBSCAN PHÂN CỤM VƯƠNG TRIỀU (DYNASTY CLUSTERS)
+# 7. DBSCAN PHÂN CỤM VƯƠNG TRIỀU (DYNASTY CLUSTERS)
 # ==========================================
-print("🔮 Bước 4.5: Áp dụng DBSCAN phân cụm mật độ để tìm profile các đội thống trị...")
-from sklearn.cluster import DBSCAN
-from sklearn.preprocessing import StandardScaler
+print("🔮 Bước 4.5: Áp dụng thuật toán mật độ DBSCAN tìm Dynasty Profile...")
 
-# Đảm bảo các đặc trưng chiến lược đầu vào cho DBSCAN đều đã được tính toán xong
 features_for_clustering = ['SRS', 'NRtg', 'TS%', 'Superstar_Impact_Score']
 existing_clust_features = [c for c in features_for_clustering if c in df.columns]
 
 if len(existing_clust_features) == len(features_for_clustering):
-    # Trích xuất dữ liệu và chuẩn hóa cục bộ trước khi truyền vào thuật toán mật độ
     X_cluster = df[existing_clust_features].fillna(0)
     X_scaled = StandardScaler().fit_transform(X_cluster)
 
-    # Cấu hình eps tối ưu giúp thuật toán bóc tách chính xác các nhóm cực kỳ xuất sắc (Championship Contenders)
     dbscan = DBSCAN(eps=0.6, min_samples=3)
     df['Dynasty_Cluster'] = dbscan.fit_predict(X_scaled)
 
-    # Chuyển đổi thành nhãn nhị phân: 1 nếu lọt vào cụm tinh hoa, 0 nếu bị coi là nhiễu (-1)
     df['Is_Dynasty_Profile'] = (df['Dynasty_Cluster'] != -1).astype(int)
     print(f"   📊 Số lượng đội bóng lọt vào profile Vương Triều: {df['Is_Dynasty_Profile'].sum()} đội.")
 else:
-    print("⚠️ CẢNH BÁO: Không thể chạy DBSCAN do thiếu một trong các trường đặc trưng cốt lõi.")
+    print("   ⚠️ CẢNH BÁO: Không thể chạy DBSCAN do thiếu một trong các trường đặc trưng cốt lõi.")
 
 # ==========================================
-# 6. LƯU DỮ LIỆU SẴN SÀNG CHO MODEL
+# 8. LƯU DỮ LIỆU SẴN SÀNG CHO MODEL
 # ==========================================
-print(f"\n💾 Bước 5: Đang xuất tập dữ liệu siêu việt ra file '{OUTPUT_FILE}'...")
+print(f"\n💾 Bước 5: Đang đóng gói dữ liệu siêu việt ra file '{OUTPUT_FILE}'...")
 if 'Conf_Seed' in df.columns:
     df = df.sort_values(by=['Season_Year', 'Conference', 'Conf_Seed'], ascending=[False, True, True])
 
@@ -128,4 +130,4 @@ df.to_csv(OUTPUT_FILE, index=False)
 
 print(f"✅ Đã thêm Xếp hạng (Rank) cho chỉ số Elo Rating, Thể lực & Chiều sâu đội hình.")
 print(f"✅ Đã tích hợp thành công bộ lọc phân cụm DBSCAN Dynasty Classifier.")
-print(f"✅ Kích thước Dataset cuối cùng: {df.shape[0]} dòng, {df.shape[1]} cột.")
+print(f"✅ Kích thước Dataset sẵn sàng huấn luyện: {df.shape[0]} dòng, {df.shape[1]} cột.")

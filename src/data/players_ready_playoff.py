@@ -1,15 +1,25 @@
 import pandas as pd
+import numpy as np
 import os
 import glob
 import re
+import warnings
 
-# Declaring the configuration path
-stats_raw_file = 'data/raw/player_data_raw.csv'
-injury_folder = 'data/raw/injury_history'
+warnings.filterwarnings("ignore")
 
-os.system('cls' if os.name == 'nt' else 'clear')
+# ==========================================
+# CẤU HÌNH ĐƯỜNG DẪN
+# ==========================================
+STATS_RAW_FILE = 'data/raw/player_data_raw.csv'
+INJURY_FOLDER = 'data/raw/injury_history'
+INJURY_REPORTS_FILE = 'data/raw/injury_reports.csv'
 
-# Pre-defined support functions are provided for use below
+OUTPUT_PLAYER_FILE = 'data/interim/player_data_playoff_ready.csv'
+OUTPUT_TEAM_INJURY_FILE = 'data/interim/team_injury_factors.csv'
+
+# ==========================================
+# CÁC HÀM HỖ TRỢ DỮ LIỆU
+# ==========================================
 def normalize_name(name):
     if pd.isna(name): return ""
     n = str(name).lower()
@@ -19,7 +29,7 @@ def normalize_name(name):
 
 def extract_player_names(text):
     if pd.isna(text) or not str(text).strip(): return []
-    text = re.sub(r'\(.*?\)', '', str(text))  # Delete the part in parentheses (...)
+    text = re.sub(r'\(.*?\)', '', str(text))  # Xóa phần trong ngoặc
     return [p.strip() for p in re.split(r'[•/]', text) if p.strip()]
 
 def get_season_dates(year):
@@ -28,134 +38,131 @@ def get_season_dates(year):
     elif year == 2012: return "2011-12-25", "2012-04-28"
     else: return f"{int(year) - 1}-10-15", f"{int(year)}-04-15"
 
-# Part I: Read and clean the original stats files
-if not os.path.exists(stats_raw_file):
-    print(f"Error: Original stats file not found '{stats_raw_file}'in the current directory")
-    exit()
+# ==========================================
+# HÀM CHÍNH: XỬ LÝ CẦU THỦ & MÔ HÌNH CHẤN THƯƠNG
+# ==========================================
+def process_player_data():
+    # Xóa màn hình terminal khi bắt đầu chạy
+    os.system('cls' if os.name == 'nt' else 'clear')
+    
+    print("🚀 BẮT ĐẦU XỬ LÝ CẦU THỦ & MÔ HÌNH CHẤN THƯƠNG XÁC SUẤT 🚀")
+    print("-" * 70)
 
-print(f"Loading data from file: '{stats_raw_file}'")
-df_stats = pd.read_csv(stats_raw_file)
+    # 1. ĐỌC VÀ LÀM SẠCH DỮ LIỆU CẦU THỦ GỐC
+    if not os.path.exists(STATS_RAW_FILE):
+        print(f"❌ LỖI: Không tìm thấy file gốc '{STATS_RAW_FILE}'")
+        return None, None
 
-# Handling traded players (keeping the player's last stats for that season = second team)
-df_stats_clean = df_stats.drop_duplicates(subset=['Player', 'Season_Year'], keep='last').copy()
+    print(f"📥 Đang tải dữ liệu cầu thủ từ: '{STATS_RAW_FILE}'")
+    df_stats = pd.read_csv(STATS_RAW_FILE)
 
-# Filter by minimum playing time >= 250 minutes
-df_stats_clean['Regular_Season_MP'] = pd.to_numeric(df_stats_clean['Regular_Season_MP'], errors='coerce').fillna(0)
-df_stats_clean = df_stats_clean[df_stats_clean['Regular_Season_MP'] >= 250].copy()
+    # Xử lý cầu thủ chuyển nhượng (Lấy team cuối cùng)
+    df_players = df_stats.drop_duplicates(subset=['Player', 'Season_Year'], keep='last').copy()
+    df_players['Regular_Season_MP'] = pd.to_numeric(df_players.get('Regular_Season_MP', 0), errors='coerce').fillna(0)
+    df_players = df_players[df_players['Regular_Season_MP'] >= 250].copy()
+    df_players['Norm_Name'] = df_players['Player'].apply(normalize_name)
 
-# Standardize the name column for later reference
-df_stats_clean['Norm_Name'] = df_stats_clean['Player'].apply(normalize_name)
+    # Khởi tạo xác suất ra sân mặc định là 1.0 (Khỏe mạnh) cho tất cả cầu thủ
+    df_players['Prob_Play'] = 1.0
 
-
-# Part II: Scan folders and classify the structure of 3 injury files
-if not os.path.exists(injury_folder):
-    print(f"Error: Folder not found '{injury_folder}'")
-    exit()
-
-csv_files = glob.glob(os.path.join(injury_folder, "*.csv"))
-if not csv_files:
-    print(f"Folder '{injury_folder}' is empty. There are no injury files to filter")
-    exit()
-
-print(f"Found {len(csv_files)} file CSV in folder '{injury_folder}'. Classifying")
-
-transaction_lists = []
-static_status_list = []
-
-for file in csv_files:
-    filename = os.path.basename(file)
-    try:
-        df = pd.read_csv(file)
-        df.columns = df.columns.str.strip()
-        cols_lower = [c.lower() for c in df.columns]
+    # 2. XỬ LÝ DỮ LIỆU LỊCH SỬ CHẤN THƯƠNG (Quá khứ - Hard Filter)
+    if os.path.exists(INJURY_FOLDER):
+        print(f"🔎 Đang phân tích lịch sử chấn thương từ thư mục '{INJURY_FOLDER}'...")
+        csv_files = glob.glob(os.path.join(INJURY_FOLDER, "*.csv"))
         
-        # Group 1:Log file (injury_data.csv & NBA Player Injury Stats)
-        if 'acquired' in cols_lower and 'relinquished' in cols_lower:
-            df.columns = df.columns.str.capitalize()
-            valid_df = df[['Date', 'Acquired', 'Relinquished']].copy()
-            valid_df['Date'] = pd.to_datetime(valid_df['Date'], errors='coerce')
-            transaction_lists.append(valid_df.dropna(subset=['Date']))
-            print(f"{filename}: Transaction Log")
-            
-        # Group 2: Status Report File (sportsref_download.csv)
-        elif 'player' in cols_lower and 'update' in cols_lower:
-            df_mapped = pd.DataFrame()
-            p_col = df.columns[cols_lower.index('player')]
-            u_col = df.columns[cols_lower.index('update')]
-            
-            df_mapped['Player'] = df[p_col].astype(str)
-            
-            # Extract the year from the date string (Ex: "Mon, Mar 9, 2026" -> 2026)
-            def get_year(date_str):
-                match = re.search(r'\d{4}', str(date_str))
-                return int(match.group()) if match else None
+        transaction_lists, static_status_list = [], []
+        for file in csv_files:
+            try:
+                df = pd.read_csv(file)
+                cols_lower = [str(c).lower().strip() for c in df.columns]
                 
-            df_mapped['Season_Year'] = df[u_col].apply(get_year)
-            static_status_list.append(df_mapped.dropna(subset=['Season_Year']))
-            print(f"{filename}: Status Report")
-        else:
-            print(f"{filename}: Incorrect structure, skip")
-    except Exception as e:
-        print(f"Error when reading file {filename}: {e}")
+                if 'acquired' in cols_lower and 'relinquished' in cols_lower:
+                    df.columns = df.columns.str.capitalize()
+                    valid_df = df[['Date', 'Acquired', 'Relinquished']].copy()
+                    valid_df['Date'] = pd.to_datetime(valid_df['Date'], errors='coerce')
+                    transaction_lists.append(valid_df.dropna(subset=['Date']))
+                elif 'player' in cols_lower and 'update' in cols_lower:
+                    df_mapped = pd.DataFrame()
+                    p_col = df.columns[cols_lower.index('player')]
+                    u_col = df.columns[cols_lower.index('update')]
+                    df_mapped['Player'] = df[p_col].astype(str)
+                    df_mapped['Season_Year'] = df[u_col].apply(lambda x: int(re.search(r'\d{4}', str(x)).group()) if re.search(r'\d{4}', str(x)) else None)
+                    static_status_list.append(df_mapped.dropna(subset=['Season_Year']))
+            except Exception as e:
+                pass
 
-# Merge data from each group
-df_tx = pd.concat(transaction_lists, ignore_index=True).sort_values(by='Date') if transaction_lists else pd.DataFrame()
-df_status = pd.concat(static_status_list, ignore_index=True).drop_duplicates() if static_status_list else pd.DataFrame()
+        df_tx = pd.concat(transaction_lists, ignore_index=True) if transaction_lists else pd.DataFrame()
+        df_status = pd.concat(static_status_list, ignore_index=True) if static_status_list else pd.DataFrame()
+        if not df_status.empty: df_status['Norm_Name'] = df_status['Player'].apply(normalize_name)
 
-if not df_status.empty:
-    df_status['Norm_Name'] = df_status['Player'].apply(normalize_name)
-
-
-# Part III: Filter season
-all_healthy_seasons = []
-unique_years = sorted(df_stats_clean['Season_Year'].unique().astype(int))
-
-print("Running injury matching algorithm")
-
-for year in unique_years:
-    injured_set = set()
-    
-    # Option A: Scanning using the timeline algorithm (Log Group)
-    if not df_tx.empty:
-        start_date, playoff_start = get_season_dates(year)
-        season_mask = (df_tx['Date'] >= start_date) & (df_tx['Date'] <= playoff_start)
-        df_season_tx = df_tx[season_mask]
-        
-        for _, row in df_season_tx.iterrows():
-            for p in extract_player_names(row['Relinquished']):
-                injured_set.add(normalize_name(p))
-            for p in extract_player_names(row['Acquired']):
-                norm_p = normalize_name(p)
-                if norm_p in injured_set:
-                    injured_set.remove(norm_p)
-                    
-    # Option B: Directly add static injury cases (SportsRef Group)
-    if not df_status.empty:
-        status_current_year = df_status[df_status['Season_Year'] == year]
-        for p in status_current_year['Norm_Name']:
-            injured_set.add(p)
+        # Quét xác suất chấn thương trong quá khứ (Gán Prob_Play = 0.0)
+        unique_years = sorted(df_players['Season_Year'].unique().astype(int))
+        for year in unique_years:
+            injured_set = set()
+            if not df_tx.empty:
+                start_date, playoff_start = get_season_dates(year)
+                season_tx = df_tx[(df_tx['Date'] >= start_date) & (df_tx['Date'] <= playoff_start)]
+                for _, row in season_tx.iterrows():
+                    for p in extract_player_names(row['Relinquished']): injured_set.add(normalize_name(p))
+                    for p in extract_player_names(row['Acquired']):
+                        norm_p = normalize_name(p)
+                        if norm_p in injured_set: injured_set.remove(norm_p)
             
-    # Perform an Anti-Join to filter out injured players of the current year
-    df_stats_year = df_stats_clean[df_stats_clean['Season_Year'] == year].copy()
-    total_players_year = len(df_stats_year)
-    
-    df_healthy_year = df_stats_year[~df_stats_year['Norm_Name'].isin(injured_set)].copy()
-    removed_count = total_players_year - len(df_healthy_year)
-    
-    all_healthy_seasons.append(df_healthy_year)
-    print(f"Season {year}: Previous {total_players_year} -> Remove {removed_count} -> Remaining {len(df_healthy_year)} players")
+            if not df_status.empty:
+                for p in df_status[df_status['Season_Year'] == year]['Norm_Name']: injured_set.add(p)
+            
+            # Gán xác suất 0.0 cho các cầu thủ chấn thương trong quá khứ
+            mask_injured = (df_players['Season_Year'] == year) & (df_players['Norm_Name'].isin(injured_set))
+            df_players.loc[mask_injured, 'Prob_Play'] = 0.0
 
+    # 3. CẬP NHẬT TỪ BÁO CÁO CHẤN THƯƠNG HIỆN TẠI (Soft Filter - Xác suất)
+    if os.path.exists(INJURY_REPORTS_FILE):
+        print(f"🩹 Đang cập nhật báo cáo chấn thương hiện tại từ '{INJURY_REPORTS_FILE}'...")
+        injuries_current = pd.read_csv(INJURY_REPORTS_FILE)
+        status_prob = {'Available': 1.0, 'Probable': 0.75, 'Questionable': 0.50, 'Doubtful': 0.25, 'Out': 0.0}
+        
+        # Merge để lấy xác suất cập nhật
+        injuries_current['Prob_Play_New'] = injuries_current['Status'].map(status_prob).fillna(1.0)
+        injuries_current['Norm_Name'] = injuries_current['Player_Name'].apply(normalize_name)
+        
+        df_players = pd.merge(df_players, injuries_current[['Season_Year', 'Norm_Name', 'Prob_Play_New']], 
+                              on=['Season_Year', 'Norm_Name'], how='left')
+        
+        # Nếu có xác suất mới từ báo cáo, ưu tiên dùng xác suất mới
+        df_players['Prob_Play'] = np.where(df_players['Prob_Play_New'].notna(), df_players['Prob_Play_New'], df_players['Prob_Play'])
+        df_players.drop(columns=['Prob_Play_New'], inplace=True)
 
-# Part IV: Aggregate and export the final data file
-if all_healthy_seasons:
-    combined_healthy_data = pd.concat(all_healthy_seasons, ignore_index=True)
-    combined_healthy_data.drop(columns=['Norm_Name'], inplace=True, errors='ignore')
+    # 4. TÍNH TOÁN SỨC MẠNH KỲ VỌNG (EXPECTED METRICS)
+    print("🧮 Đang tính toán các chỉ số Sức mạnh Kỳ vọng (Expected Metrics)...")
+    if 'VORP' in df_players.columns:
+        df_players['Expected_VORP'] = df_players['VORP'] * df_players['Prob_Play']
+    if 'BPM' in df_players.columns:
+        df_players['Expected_BPM'] = df_players['BPM'] * df_players['Prob_Play']
+
+    # 5. TỔNG HỢP CHỈ SỐ LÊN CẤP ĐỘ ĐỘI BÓNG (TEAM LEVEL)
+    team_col = 'Tm' if 'Tm' in df_players.columns else ('TEAM_NAME' if 'TEAM_NAME' in df_players.columns else None)
     
-    os.makedirs('data', exist_ok=True)
-    out_path = 'data/interim/player_data_playoff_ready.csv'
-    combined_healthy_data.to_csv(out_path, index=False)
+    if team_col:
+        team_injury_adjusted = df_players.groupby(['Season_Year', team_col]).agg(
+            Team_Health_Factor=('Prob_Play', 'mean'),
+            Adjusted_Team_VORP=('Expected_VORP', 'sum') if 'Expected_VORP' in df_players.columns else ('Prob_Play', 'count')
+        ).reset_index()
+        team_injury_adjusted.rename(columns={team_col: 'TEAM_NAME'}, inplace=True)
+        
+        os.makedirs('data/interim', exist_ok=True)
+        team_injury_adjusted.to_csv(OUTPUT_TEAM_INJURY_FILE, index=False)
+        print(f"📊 Đã xuất chỉ số chấn thương/thể lực Đội bóng ra '{OUTPUT_TEAM_INJURY_FILE}'")
+
+    # 6. XUẤT FILE CẦU THỦ CUỐI CÙNG
+    df_players.drop(columns=['Norm_Name'], inplace=True, errors='ignore')
+    os.makedirs('data/interim', exist_ok=True)
+    df_players.to_csv(OUTPUT_PLAYER_FILE, index=False)
     
-    print(f"Total number of healthy players available for the Play-offs (2000-2025): {len(combined_healthy_data)}")
-    print(f"The clean data file has been saved at: '{out_path}'")
-else:
-    print("No data was exported")
+    print("-" * 70)
+    print(f"✅ XONG! Dữ liệu cầu thủ đã sẵn sàng với mô hình chấn thương xác suất.")
+    print(f"   Tổng số cầu thủ hợp lệ (kể cả chấn thương): {len(df_players)}")
+    
+    return df_players
+
+# Gọi trực tiếp hàm xử lý để file tự chạy khi gõ lệnh terminal
+process_player_data()

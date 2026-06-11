@@ -1,48 +1,48 @@
 import os
 import pandas as pd
 
-# 1. ĐỊNH NGHĨA ĐƯỜNG DẪN CÁC FILE
-PATH_MASTER_INPUT  = 'data/interim/teams_dataset.csv'             # Teams file
-PATH_PLAYER_INPUT  = 'data/interim/player_data_playoff_ready.csv'  # File players ready for play-off
-PATH_FINAL_OUTPUT  = 'data/processed/final_complete_dataset.csv' 
+# 1. ĐỊNH NGHĨA ĐƯỜNG DẪN CÁC FILE DỮ LIỆU
+PATH_MASTER_INPUT    = 'data/interim/teams_dataset.csv'             # File Đội bóng gốc
+PATH_PLAYER_INPUT    = 'data/interim/player_data_playoff_ready.csv'  # File Cầu thủ khỏe mạnh/chấn thương
+PATH_API_DIFF_INPUT  = 'data/raw/nba_api_diff_features.csv'          # File Chỉ số đối kháng từ NBA API
+PATH_FINAL_OUTPUT    = 'data/processed/final_complete_dataset.csv'   # File đích hoàn chỉnh cuối cùng
 
-print("Final data merging process (TEAM + PLAYERS + FATIGUE)")
+print("🚀 BẮT ĐẦU PIPELINE GỘP MASTER TỔNG HỢP (TEAM + PLAYERS + NBA API) 🚀")
+print("-" * 70)
 
-# 2. Read and calculate players and fitness data
-print("Step 1: Loading and analyzing Playoff teams data (Rotation & Fatigue)")
+# ==========================================================
+# STEP 1: ĐỌC VÀ PHÂN TÍCH THỂ LỰC & ĐỘ SÂU ĐỘI HÌNH CẦU THỦ
+# ==========================================================
+print("Bước 1: Đang tải và phân tích dữ liệu đội hình thi đấu (Rotation & Fatigue)...")
 if not os.path.exists(PATH_PLAYER_INPUT):
-    print(f"Error: Player data file not found '{PATH_PLAYER_INPUT}'")
+    print(f"❌ LỖI: Không tìm thấy file dữ liệu cầu thủ '{PATH_PLAYER_INPUT}'")
     exit()
 
 df_players = pd.read_csv(PATH_PLAYER_INPUT)
 team_season_features = []
 
-# Analyzing deep lineup of the teams
 for (year, team), group in df_players.groupby(['Season_Year', 'TEAM_NAME']):
-    # Sort players by their Voting Value Proposition (VORP) from highest to lowest
+    # Sắp xếp cầu thủ theo chỉ số đóng góp VORP giảm dần
     group_sorted = group.sort_values(by='VORP', ascending=False).reset_index(drop=True)
     
-    # Old basic stats
     total_team_vorp = group_sorted['VORP'].sum()
     playoff_ready_players = len(group)
     team_avg_obpm = group['OBPM'].mean()
     team_avg_dbpm = group['DBPM'].mean()
     
-    # New advaced stats
-    # 1. Get data on the Top 7 key players (Playoff Rotation)
+    # Lấy thông số Top 7 cầu thủ gánh đội (Vòng xoay Playoff chính)
     top7 = group_sorted.head(7)
     top7_vorp = top7['VORP'].sum()
     top7_vorp_share = top7_vorp / total_team_vorp if total_team_vorp != 0 else 0
     
-    # 2. Calculate the stamina/overload (Fatigue) of the 5 most played-mintue players
+    # Tính toán mức độ quá tải thời gian thi đấu của Top 5 Core chính
     top5_minutes = group_sorted.sort_values(by='Regular_Season_MP', ascending=False).head(5)
     total_core_mp = top5_minutes['Regular_Season_MP'].sum() 
     
-    # 3. Quality of the reserve squad (Players in positions 8, 9, and 10)
+    # Đo lường chất lượng đội hình dự bị (Vị trí rotation số 8, 9, 10)
     bench = group_sorted.iloc[7:10]
     bench_tactical_bpm = (bench['OBPM'] + bench['DBPM']).mean() if len(bench) > 0 else 0
     
-    # Package all the stats
     team_season_features.append({
         'Season_Year': year,
         'TEAM_NAME': team,
@@ -56,30 +56,26 @@ for (year, team), group in df_players.groupby(['Season_Year', 'TEAM_NAME']):
     })
 
 df_players_agg = pd.DataFrame(team_season_features)
-
-# Round the averages/percentages for a nicer look
 cols_to_round = ['Team_Avg_OBPM', 'Team_Avg_DBPM', 'Team_Total_VORP', 'Playoff_Core_VORP_Share', 'Bench_Tactical_BPM']
 df_players_agg[cols_to_round] = df_players_agg[cols_to_round].round(3)
+print(f"🔹 Đã hoàn tất xử lý độ sâu đội hình cho {df_players_agg.shape[0]} lượt đội bóng.")
 
-print(f"The depth and stamina have been calculated {df_players_agg.shape[0]} basketball teams")
-
-# 3. Read AND normalize the teams dataset file
-print("Step 2: Loading dataset teams_dataset.csv")
+# ==========================================================
+# STEP 2: ĐỌC VÀ CHUẨN HÓA ĐỒNG BỘ FILE ĐỘI BÓNG GỐC
+# ==========================================================
+print("\nBước 2: Đang tải và chuẩn hóa cấu trúc file teams_dataset.csv...")
 if not os.path.exists(PATH_MASTER_INPUT):
-    print(f"Error: Original file not found '{PATH_MASTER_INPUT}'")
+    print(f"❌ LỖI: Không tìm thấy file đội bóng master thô '{PATH_MASTER_INPUT}'")
     exit()
 
 df_master_orig = pd.read_csv(PATH_MASTER_INPUT)
 
-# Normalize column names
-if 'Team' in df_master_orig.columns:
-    df_master_orig.rename(columns={'Team': 'TEAM_NAME'}, inplace=True)
-if 'Year' in df_master_orig.columns:
-    df_master_orig.rename(columns={'Year': 'Season_Year'}, inplace=True)
-if 'Season' in df_master_orig.columns:
-    df_master_orig.rename(columns={'Season': 'Season_Year'}, inplace=True)
+# Chuẩn hóa đồng bộ tên tiêu đề cột
+if 'Team' in df_master_orig.columns: df_master_orig.rename(columns={'Team': 'TEAM_NAME'}, inplace=True)
+if 'Year' in df_master_orig.columns: df_master_orig.rename(columns={'Year': 'Season_Year'}, inplace=True)
+if 'Season' in df_master_orig.columns: df_master_orig.rename(columns={'Season': 'Season_Year'}, inplace=True)
 
-# Standard map dictionary of team names
+# Từ điển đồng bộ tên viết tắt/lịch sử câu lạc bộ NBA tránh lệch Key khi Merge
 team_name_mapping = {
     'Los Angeles Clippers': 'LA Clippers',
     'Charlotte Bobcats': 'Charlotte Hornets',
@@ -89,22 +85,43 @@ team_name_mapping = {
 df_master_orig['TEAM_NAME'] = df_master_orig['TEAM_NAME'].replace(team_name_mapping)
 df_players_agg['TEAM_NAME'] = df_players_agg['TEAM_NAME'].replace(team_name_mapping)
 
-# 4. Merge data & export files
-print("Step 3: Proceed with assembly Master Dataset and Player Features")
+# ==========================================================
+# STEP 3: THỰC HIỆN TRỘN THÔNG TIN ĐỘI BÓNG VÀ CẦU THỦ
+# ==========================================================
+print("\nBước 3: Đang tiến hành lắp ráp dữ liệu Team Stats và Player Features...")
 df_final_complete = pd.merge(df_master_orig, df_players_agg, on=['TEAM_NAME', 'Season_Year'], how='left')
 
-# Fill in 0 for teams with missing player data
-cols_to_fillna = [
-    'Playoff_Ready_Players', 'Team_Total_VORP', 'Team_Avg_OBPM', 'Team_Avg_DBPM', 
-    'Playoff_Core_VORP_Share', 'Core_Fatigue_MP', 'Bench_Tactical_BPM'
-]
+# Điền 0 nếu đội bóng đó bị khuyết dữ liệu phân tích chi tiết cầu thủ lẻ
+cols_to_fillna = ['Playoff_Ready_Players', 'Team_Total_VORP', 'Team_Avg_OBPM', 'Team_Avg_DBPM', 
+                  'Playoff_Core_VORP_Share', 'Core_Fatigue_MP', 'Bench_Tactical_BPM']
 df_final_complete[cols_to_fillna] = df_final_complete[cols_to_fillna].fillna(0)
 
-print(f"Step 4: Writing all data to a file '{PATH_FINAL_OUTPUT}'")
+# ==========================================================
+# STEP 4: GỘP THÊM CHỈ SỐ ĐỐI KHÁNG TỪ FILE RAW NBA API
+# ==========================================================
+print("\nBước 4: Đang tích hợp các chỉ số hiệu số đối kháng từ NBA API...")
+if os.path.exists(PATH_API_DIFF_INPUT):
+    df_api_diff = pd.read_csv(PATH_API_DIFF_INPUT)
+    df_api_diff['TEAM_NAME'] = df_api_diff['TEAM_NAME'].replace(team_name_mapping)
+    
+    # Chống trùng lặp cột nếu file tổng chạy đi chạy lại nhiều lần
+    target_api_cols = ['Diff_PTS', 'Diff_eFG', 'Diff_REB', 'Diff_TOV']
+    df_final_complete = df_final_complete.drop(columns=[c for c in target_api_cols if c in df_final_complete.columns], errors='ignore')
+    
+    # Tiến hành gộp
+    df_final_complete = pd.merge(df_final_complete, df_api_diff, on=['Season_Year', 'TEAM_NAME'], how='left')
+    df_final_complete[target_api_cols] = df_final_complete[target_api_cols].fillna(0)
+    print("🔹 Đã gộp thành công 4 đặc trưng đối kháng: Diff_PTS, Diff_eFG, Diff_REB, Diff_TOV.")
+else:
+    print("⚠️ CẢNH BÁO: Chưa tìm thấy file 'nba_api_diff_features.csv'. Bỏ qua tích hợp chỉ số API.")
+
+# ==========================================================
+# STEP 5: XUẤT FILE DATASET HOÀN CHỈNH ĐỂ HUẤN LUYỆN
+# ==========================================================
+print(f"\nBước 5: Đang đóng gói và lưu bộ dữ liệu tổng hợp vào '{PATH_FINAL_OUTPUT}'...")
 os.makedirs(os.path.dirname(PATH_FINAL_OUTPUT), exist_ok=True)
 df_final_complete.to_csv(PATH_FINAL_OUTPUT, index=False)
 
-print(f"Complete merging")
-print(f"Add more three stats: Core_Share, Fatigue_MP, Bench_BPM")
-print(f"Size of final Dataset: {df_final_complete.shape[0]} rows, {df_final_complete.shape[1]} columns.")
-print(f"The final file is saved: '{PATH_FINAL_OUTPUT}'")
+print("-" * 70)
+print("✅ HOÀN THÀNH MỸ MÃN TIẾN TRÌNH GỘP TỔNG!")
+print(f"📊 Bộ dữ liệu hoàn chỉnh đạt kích thước: {df_final_complete.shape[0]} hàng, {df_final_complete.shape[1]} cột.")
