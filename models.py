@@ -5,7 +5,7 @@ from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
 def train_voting_baseline(X_train, y_top4, y_top2, y_champ):
-    """Mô hình 1: Voting Ensemble Cơ bản"""
+    # Model 1: Voting Ensemble
     base_learners = [
         ('xgb', XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.01, random_state=42, eval_metric='logloss')),
         ('lgb', LGBMClassifier(n_estimators=100, max_depth=3, learning_rate=0.01, random_state=42, verbose=-1)),
@@ -24,7 +24,7 @@ def train_voting_baseline(X_train, y_top4, y_top2, y_champ):
     return model_top4, model_top2, model_champ
 
 def train_stacking_baseline(X_train, y_top4, y_top2, y_champ):
-    """Mô hình 2: Stacking Tiêu chuẩn (Dùng Logistic Regression)"""
+    # Model 2: Standard Stacking (Using Logistics Regression)
     base_learners = [
         ('xgb', XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.01, random_state=42, eval_metric='logloss')),
         ('lgb', LGBMClassifier(n_estimators=100, max_depth=3, learning_rate=0.01, random_state=42, verbose=-1)),

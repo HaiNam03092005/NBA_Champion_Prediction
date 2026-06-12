@@ -8,7 +8,7 @@ from sklearn.feature_selection import RFECV
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 
-# Import các mô-đun chuyên biệt
+# Import specialized modules
 from models import train_stacking_baseline, train_voting_baseline
 from simulator import simulate_conference_bracket, simulate_monte_carlo_bo7
 
@@ -16,10 +16,7 @@ warnings.filterwarnings("ignore")
 
 os.makedirs('results', exist_ok=True)
 
-# ==========================================================
-# 1. TẢI VÀ CHUẨN BỊ DỮ LIỆU
-# ==========================================================
-print("📂 Đang tải dữ liệu từ model_ready_dataset.csv...")
+# 1.DOWNLOAD AND PREPARE DATA
 df = pd.read_csv('data/processed/model_ready_dataset.csv')
 df.fillna(0, inplace=True)
 
@@ -30,7 +27,7 @@ except FileNotFoundError:
         columns=['Season_Year', 'TEAM_NAME', 'OPPONENT_NAME', 'H2H_Win_Rate']
     )
 
-# Lấy TOÀN BỘ các đặc trưng tiềm năng để đưa vào máy tự lọc
+# Extract ALL potential features to incorporate into the self-filtering machine
 absolute_features = [
     'Has_Top5_MVP', 'All_NBA_Count', 'Prev_Year_Playoff_Round',
     'Age_Diff', 'Elite_Defense_Flag', 'Two_Way_Score', 'eFG_Diff',
@@ -44,7 +41,7 @@ all_possible_features = [
 ]
 all_possible_features = [f for f in all_possible_features if f in df.columns]
 
-# Tách tập Train/Test theo năm
+# Separate the Train/Test series by season
 train_data = df[
     (df['Season_Year'] >= 2000) & (df['Season_Year'] <= 2020)
 ].copy()
@@ -52,17 +49,15 @@ test_data = df[
     (df['Season_Year'] >= 2021) & (df['Season_Year'] <= 2025)
 ].copy()
 
-# Lọc các đội vào Playoff để làm bàn đạp tìm Feature
+# Filter the teams into the Playoffs to use them as a springboard to find Feature
 train_pool = train_data[train_data['Is_Playoff'] == 1].copy()
 
 X_raw_train = train_pool[all_possible_features]
-# Mục tiêu chọn đặc trưng dựa trên khả năng đoán đội Vô Địch (Target_Champ)
+# The goal is to select features based on the ability to predict the winning team (Target_Champ)
 y_raw_train = train_pool['Target_Champ'] 
 
-# ----------------------------------------------------------
-# 🤖 MACHINE LEARNING TỰ ĐỘNG DÒ TÌM FEATURES (RFECV)
-# ----------------------------------------------------------
-print("\n🤖 AI đang tự động dò tìm tập hợp đặc trưng tối ưu nhất...")
+
+print("\nAI is automatically detecting the optimal set of features")
 base_estimator = RandomForestClassifier(n_estimators=50, random_state=42)
 cv_strategy = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
@@ -75,37 +70,31 @@ selector = RFECV(
 )
 selector.fit(X_raw_train, y_raw_train)
 
-# Trích xuất danh sách các cột được AI giữ lại
+# Extract a list of columns retained by the AI
 features = list(np.array(all_possible_features)[selector.support_])
 
-print(f"🔥 AI đã lọc từ {len(all_possible_features)} xuống còn "
-      f"{len(features)} đặc trưng xuất sắc nhất!")
-print(f"📋 Danh sách đặc trưng được chọn tự động: {features}\n")
+print(f"AI filtered {len(all_possible_features)} down to "
+      f"{len(features)} The most outstanding features")
 
-# Chuẩn hóa dữ liệu dựa trên danh sách tính năng đã được AI chọn lọc
+# Data normalization is based on a list of features selected by AI
 scaler = StandardScaler()
 scaler.fit(train_data[features])
 X_train_pool_scaled = scaler.transform(train_pool[features])
 
-# ==========================================================
-# 2. HUẤN LUYỆN 2 MÔ HÌNH (Dùng Features tối ưu mới)
-# ==========================================================
-print("🧠 ĐANG HUẤN LUYỆN MÔ HÌNH 1: VOTING ENSEMBLE...")
+# 2.TRAIN 2 MODELS (Using new optimized features)
+print("TRAINING MODEL 1: VOTING ENSEMBLE")
 vote_top4, vote_top2, vote_champ = train_voting_baseline(
     X_train_pool_scaled, train_pool['Target_Top4'],
     train_pool['Target_Top2'], train_pool['Target_Champ']
 )
 
-print("🧠 ĐANG HUẤN LUYỆN MÔ HÌNH 2: STACKING TIÊU CHUẨN...")
+print("TRAINING MODEL 2: STANDARD STACKING")
 stack_top4, stack_top2, stack_champ = train_stacking_baseline(
     X_train_pool_scaled, train_pool['Target_Top4'],
     train_pool['Target_Top2'], train_pool['Target_Champ']
 )
 
-
-# ==========================================================
-# 3. ĐÁNH GIÁ MÔ HÌNH
-# ==========================================================
+# 3.MODEL EVALUATION
 def evaluate_model(m_top4, m_top2, m_champ):
     total_top4, total_top2, total_champ = 0, 0, 0
     max_top4, max_top2, max_champ = 0, 0, 0
@@ -175,28 +164,19 @@ def evaluate_model(m_top4, m_top2, m_champ):
     return acc_top4, acc_top2, acc_champ
 
 
-print("⚙️ ĐANG CHẠY GIẢ LẬP MONTE CARLO CHO MODEL 1...")
 v_top4, v_top2, v_champ = evaluate_model(vote_top4, vote_top2, vote_champ)
 
-print("⚙️ ĐANG CHẠY GIẢ LẬP MONTE CARLO CHO MODEL 2...")
 s_top4, s_top2, s_champ = evaluate_model(stack_top4, stack_top2, stack_champ)
 
-print("\n" + "="*70)
-print("📊 BẢNG SO SÁNH 2 MÔ HÌNH: VOTING vs STACKING 📊")
-print("="*70)
-print(f"| {'Tiêu chí Đánh giá':<20} | {'Mô hình 1 (Voting)':<20} | "
-      f"{'Mô hình 2 (Stacking)':<20} |")
+print("COMPARISON TABLE OF 2 MODELS: VOTING vs. STACKING")
+print(f"| {'Evaluation Criteria':<20} | {'Model 1 (Voting)':<20} | "
+      f"{'Model 2 (Stacking)':<20} |")
 print("-" * 70)
-print(f"| {'Dự đoán Top 4':<20} | {v_top4:>19.1f}% | {s_top4:>19.1f}% |")
-print(f"| {'Dự đoán NBA Finals':<20} | {v_top2:>19.1f}% | {s_top2:>19.1f}% |")
-print(f"| {'Đoán Nhà Vô Địch':<20} | {v_champ:>19.1f}% | {s_champ:>19.1f}% |")
-print("="*70)
+print(f"| {'Predicting the Top 4':<20} | {v_top4:>19.1f}% | {s_top4:>19.1f}% |")
+print(f"| {'NBA Finals Predictions':<20} | {v_top2:>19.1f}% | {s_top2:>19.1f}% |")
+print(f"| {'Champion prediction':<20} | {v_champ:>19.1f}% | {s_champ:>19.1f}% |")
 
-# ==========================================================
-# 4. VẼ BIỂU ĐỒ VÀ LƯU RA THƯ MỤC 'RESULTS'
-# ==========================================================
-print("\n📈 Đang tạo các biểu đồ phân tích...")
-
+# 4.DRAW THE CHART AND SAVE IT TO THE 'RESULTS' FOLDER
 labels = ['Top 4', 'Top 2 (Finals)', 'Nhà Vô Địch']
 voting_scores = [v_top4, v_top2, v_champ]
 stacking_scores = [s_top4, s_top2, s_champ]
@@ -208,8 +188,8 @@ plt.figure(figsize=(8, 6))
 plt.bar(x - width/2, voting_scores, width, label='Voting', color='#4c72b0')
 plt.bar(x + width/2, stacking_scores, width, label='Stacking', color='#dd8452')
 
-plt.ylabel('Độ chính xác (%)', fontweight='bold')
-plt.title('SO SÁNH HIỆU SUẤT: VOTING VS STACKING', fontweight='bold')
+plt.ylabel('Accuracy(%)', fontweight='bold')
+plt.title('PERFORMANCE COMPARISON: VOTING VS. STACKING', fontweight='bold')
 plt.xticks(x, labels)
 plt.ylim(0, 100)
 plt.legend()
@@ -223,20 +203,19 @@ plt.tight_layout()
 plt.savefig('results/model_performance_comparison.png', dpi=300)
 plt.close()
 
-# Vẽ biểu đồ Feature tầm quan trọng dựa trên tập đã chọn tự động
+#  Plotting a Feature Importance chart based on the selected set
 rf_estimator = vote_champ.named_estimators_['rf']
 importances = rf_estimator.feature_importances_
 indices = np.argsort(importances)
 
 plt.figure(figsize=(10, 6))
-plt.title('MỨC ĐỘ QUAN TRỌNG CỦA CÁC TÍNH NĂNG DO AI CHỌN', fontweight='bold')
+plt.title('THE IMPORTANCE LEVEL OF FEATURES IS CHOSEN BY AI', fontweight='bold')
 plt.barh(range(len(indices)), importances[indices], color='teal', align='center')
 plt.yticks(range(len(indices)), [features[i] for i in indices])
-plt.xlabel('Mức độ ảnh hưởng (Relative Importance)')
+plt.xlabel('Relative Importance')
 plt.tight_layout()
 plt.savefig('results/top15_feature_importance.png', dpi=300)
 plt.close()
 
-print("💾 Đã lưu 2 biểu đồ vào thư mục 'results/':")
-print("   1. results/model_performance_comparison.png")
-print("   2. results/top15_feature_importance.png")
+print("1.results/model_performance_comparison.png")
+print("2.results/top15_feature_importance.png")
